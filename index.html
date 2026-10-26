@@ -155,8 +155,8 @@ window.pet.onSay(({text,choices:ch})=>{
 // ----- wake / sleep with glitch -----
 function glitch(el,cls){ el.classList.remove('glitch-in','glitch-out'); void el.offsetWidth; el.classList.add(cls); }
 async function wake(){
-  if(awake) return; awake=true; bubble.style.display='none';
-  B.classList.add('awake'); glitch($('panel'),'glitch-in'); setState('listening');
+  if(awake) return; awake=true; audio(); bubble.style.display='none';
+  B.classList.add('awake'); noiseBurst(); glitch($('panel'),'glitch-in'); setState('listening');
   window.pet.focus(); setTimeout(()=>$('inp').focus(),100);
   if(!$('cap').textContent) { say('Oh. You again. Net has been quiet. Say something.'); }
   armSleep();
@@ -169,12 +169,32 @@ function sleep(instant){
 }
 function armSleep(){ clearTimeout(sleepT); sleepT=setTimeout(()=>{ if(!busy) sleep(); else armSleep(); },30000); }
 
-// ----- typewriter + voice -----
+// ----- typewriter + voice + sound -----
+let actx=null;
+function audio(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }catch{} return actx; }
+function blip(){ const a=audio(); if(!a||!voiceOn) return; const o=a.createOscillator(), g=a.createGain(); o.type='square';
+  o.frequency.value=160+Math.random()*260; g.gain.setValueAtTime(.025,a.currentTime); g.gain.exponentialRampToValueAtTime(.0001,a.currentTime+.05);
+  o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+.06); }
+function noiseBurst(){ const a=audio(); if(!a||!voiceOn) return; const n=a.sampleRate*.35, b=a.createBuffer(1,n,a.sampleRate), d=b.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n)*(Math.random()<.5?1:.2);
+  const s=a.createBufferSource(), g=a.createGain(); g.gain.value=.06; s.buffer=b; s.connect(g).connect(a.destination); s.start(); }
+const kv=(k,v)=>{ try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v);}catch{} };
+function voices(){ return (window.speechSynthesis?speechSynthesis.getVoices():[]).filter(v=>/^en/i.test(v.lang)); }
+function pickVoice(){ const vs=voices(); if(!vs.length) return null;
+  const saved=kv('capri_voice'); const s=vs.find(v=>v.name===saved); if(s) return s;
+  const score=v=>(/natural|neural|online/i.test(v.name)?4:0)+(/google|samantha|zira|aria|jenny|sonia|karen|moira|female/i.test(v.name)?2:0)+(v.localService?0:1);
+  return vs.slice().sort((a,b)=>score(b)-score(a))[0]; }
+function speak(text){
+  if(!voiceOn||!window.speechSynthesis) return;
+  try{ speechSynthesis.cancel(); const v=pickVoice();
+    (text.match(/[^.,!?;:]+[.,!?;:]*/g)||[text]).forEach(part=>{ const u=new SpeechSynthesisUtterance(part.trim()); if(v) u.voice=v;
+      u.pitch=.55+Math.random()*.7; u.rate=.95+Math.random()*.25; speechSynthesis.speak(u); }); }catch{}
+}
 function say(text, then){
   clearInterval(typeT); setState('talking'); busy=true;
   const cap=$('cap'); cap.innerHTML='<b>CAPRI &gt;</b> '; const span=document.createElement('span'); cap.appendChild(span); span.className='caret';
-  if(voiceOn && window.speechSynthesis){ try{ speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(text); u.pitch=.6; u.rate=1.05; speechSynthesis.speak(u);}catch{} }
-  let i=0; typeT=setInterval(()=>{ span.textContent=text.slice(0,++i);
+  speak(text);
+  let i=0; typeT=setInterval(()=>{ span.textContent=text.slice(0,++i); if(i%2===0 && text[i-1]!==' ') blip();
     if(i>=text.length){ clearInterval(typeT); span.className=''; busy=false; if(awake) setState('listening'); armSleep(); } },28);
 }
 
@@ -184,6 +204,12 @@ $('inp').addEventListener('keydown',async e=>{
   if(e.key!=='Enter') return;
   const t=e.target.value.trim(); if(!t||busy) return; e.target.value='';
   $('you').textContent='> you: '+t.replace(/^\/key .*/,'/key ********');
+  if(/^\/voice/.test(t)){
+    const vs=voices(), n=parseInt(t.split(/\s+/)[1]);
+    if(n>=1 && vs[n-1]){ kv('capri_voice',vs[n-1].name); $('you').textContent='> you: '+t; return say('Voice set: '+vs[n-1].name+'. How do I sound?'); }
+    $('you').textContent='> you: /voice'; const cur=pickVoice();
+    return say(vs.length? 'Voices: '+vs.slice(0,8).map((v,k)=>(k+1)+'='+v.name.replace(/Microsoft |Google /,'')).join(', ')+'. Type /voice NUMBER. Now: '+(cur?cur.name:'none') : 'No voices found on this device.');
+  }
   setState('thinking'); busy=true; $('cap').innerHTML='<b>CAPRI &gt;</b> decrypting ...';
   armSleep();
   const r = await window.pet.chat(t);
